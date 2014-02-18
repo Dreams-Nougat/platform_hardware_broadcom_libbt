@@ -1,0 +1,7 @@
+Code-Review+2: Dmitry Shmidt <dimitrysh%android.com@gtempaccount.com>
+Verified+1: Colin Cross <ccross@android.com>
+Submitted-by: Colin Cross <ccross@android.com>
+Submitted-at: Tue, 18 Feb 2014 23:10:37 +0000
+Reviewed-on: https://android-review.googlesource.com/82190
+Project: platform/hardware/broadcom/libbt
+Branch: refs/heads/master
