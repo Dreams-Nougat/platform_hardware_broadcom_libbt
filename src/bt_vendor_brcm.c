@@ -28,6 +28,8 @@
 
 #include <utils/Log.h>
 #include <string.h>
+#include <unistd.h>
+#include <errno.h>
 #include "bt_vendor_brcm.h"
 #include "upio.h"
 #include "userial_vendor.h"
@@ -41,6 +43,12 @@
 #else
 #define BTVNDDBG(param, ...) {}
 #endif
+
+/*
+**  Timing to respect for hardware compliance with datasheet
+*/
+#define WAIT_AFTER_TURN_ON_US     150*1000  /* 150 ms */
+#define WAIT_AFTER_TURN_OFF_US    15*1000   /* 15 ms  */
 
 /******************************************************************************
 **  Externs
@@ -131,7 +139,8 @@ static int init(const bt_vendor_callbacks_t* p_cb, unsigned char *local_bdaddr)
 static int op(bt_vendor_opcode_t opcode, void *param)
 {
     int retval = 0;
-
+    int retsleep = 0;
+    int errno_save = 0;
     BTVNDDBG("op for %d", opcode);
 
     switch(opcode)
@@ -139,10 +148,21 @@ static int op(bt_vendor_opcode_t opcode, void *param)
         case BT_VND_OP_POWER_CTRL:
             {
                 int *state = (int *) param;
-                if (*state == BT_VND_PWR_OFF)
+                if (*state == BT_VND_PWR_OFF) {
                     upio_set_bluetooth_power(UPIO_BT_POWER_OFF);
-                else if (*state == BT_VND_PWR_ON)
+                    retsleep = usleep(WAIT_AFTER_TURN_OFF_US);
+                    errno_save = errno;
+                    if (retsleep != 0) {
+                        ALOGE("error to sleep after OFF: %d", errno_save);
+                    }
+                } else if (*state == BT_VND_PWR_ON) {
                     upio_set_bluetooth_power(UPIO_BT_POWER_ON);
+                    retsleep = usleep(WAIT_AFTER_TURN_ON_US);
+                    errno_save = errno;
+                    if (retsleep != 0) {
+                        ALOGE("error to sleep after ON: %d", errno_save);
+                    }
+                }
             }
             break;
 
