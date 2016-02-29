@@ -170,6 +170,7 @@ extern uint8_t vnd_local_bd_addr[BD_ADDR_LEN];
 /******************************************************************************
 **  Static variables
 ******************************************************************************/
+static int hw_set_enh_sco_codec(uint16_t codec);
 
 static char fw_patchfile_path[256] = FW_PATCHFILE_LOCATION;
 static char fw_patchfile_name[128] = { 0 };
@@ -1354,6 +1355,7 @@ static void hw_sco_i2spcm_config(uint16_t codec)
         *p++ = SCO_I2SPCM_PARAM_SIZE;
         if (codec == SCO_CODEC_CVSD)
         {
+		    bt_sco_i2spcm_param[0] = SCO_I2SPCM_IF_MODE;
             bt_sco_i2spcm_param[2] = 0; /* SCO_I2SPCM_IF_SAMPLE_RATE  8k */
             bt_sco_i2spcm_param[3] = bt_sco_param[1] = sco_bus_clock_rate;
         }
@@ -1384,6 +1386,141 @@ static void hw_sco_i2spcm_config(uint16_t codec)
 
     bt_vendor_cbacks->audio_state_cb(BT_VND_OP_RESULT_FAIL);
 }
+
+static void hw_sco_i2spcm_param_cback(void *p_mem)
+{
+    HC_BT_HDR   *p_evt_buf = (HC_BT_HDR *)p_mem;
+    uint8_t     *p;
+    uint16_t    opcode;
+    HC_BT_HDR   *p_buf = NULL;
+    bt_vendor_op_result_t status = BT_VND_OP_RESULT_FAIL;
+
+    p = (uint8_t *)(p_evt_buf + 1) + HCI_EVT_CMD_CMPL_OPCODE;
+    STREAM_TO_UINT16(opcode,p);
+
+    if (*((uint8_t *)(p_evt_buf + 1) + HCI_EVT_CMD_CMPL_STATUS_RET_BYTE) == 0)
+    {
+        status = BT_VND_OP_RESULT_SUCCESS;
+    }
+
+    /* Free the RX event buffer */
+    if (bt_vendor_cbacks)
+        bt_vendor_cbacks->dealloc(p_evt_buf);
+
+    if (status == BT_VND_OP_RESULT_SUCCESS)
+    {
+    if ((opcode == HCI_VSC_WRITE_I2SPCM_INTERFACE_PARAM) &&
+        (SCO_INTERFACE_PCM == sco_bus_interface))
+    {
+        uint8_t ret = FALSE;
+        /* Ask a new buffer to hold WRITE_SCO_PCM_INT_PARAM command */
+        if (bt_vendor_cbacks)
+            p_buf = (HC_BT_HDR *)bt_vendor_cbacks->alloc(
+                    BT_HC_HDR_SIZE + HCI_CMD_PREAMBLE_SIZE + SCO_PCM_PARAM_SIZE);
+        if (p_buf)
+        {
+            p_buf->event = MSG_STACK_TO_HC_HCI_CMD;
+            p_buf->offset = 0;
+            p_buf->layer_specific = 0;
+            p_buf->len = HCI_CMD_PREAMBLE_SIZE + SCO_PCM_PARAM_SIZE;
+            p = (uint8_t *)(p_buf + 1);
+
+            UINT16_TO_STREAM(p, HCI_VSC_WRITE_SCO_PCM_INT_PARAM);
+            *p++ = SCO_PCM_PARAM_SIZE;
+            memcpy(p, &bt_sco_param, SCO_PCM_PARAM_SIZE);
+            ALOGI("SCO PCM configure {0x%x, 0x%x, 0x%x, 0x%x, 0x%x}",
+                    bt_sco_param[0], bt_sco_param[1], bt_sco_param[2], bt_sco_param[3],
+                    bt_sco_param[4]);
+            if ((ret = bt_vendor_cbacks->xmit_cb(HCI_VSC_WRITE_SCO_PCM_INT_PARAM, p_buf,
+                    hw_sco_i2spcm_param_cback)) == FALSE)
+            {
+                bt_vendor_cbacks->dealloc(p_buf);
+            }
+            else
+                return;
+        }
+        status = BT_VND_OP_RESULT_FAIL;
+    }
+  }
+    ALOGI("sco I2S/PCM config result %d [0-Success, 1-Fail]", status);
+    if (bt_vendor_cbacks)
+    {
+        bt_vendor_cbacks->audio_state_cb(status);
+    }
+
+}
+
+
+/*******************************************************************************
+**
+** Function         hw_set_enh_sco_codec
+**
+** Description      This function sends command to the controller to setup
+**                              additional parameters like PCM_sample rate
+**                              for the upcoming enhanced (BT 4.1)eSCO connection.
+**
+** Returns          -1 : Failed to send VSC
+**                   0 : Success
+**
+*******************************************************************************/
+static int hw_set_enh_sco_codec(uint16_t codec)
+{
+    HC_BT_HDR   *p_buf = NULL;
+    uint8_t     *p;
+    uint8_t     ret;
+    int   ret_val = -1;
+    uint16_t cmd_u16 = HCI_CMD_PREAMBLE_SIZE + SCO_I2SPCM_PARAM_SIZE;
+
+    BTHWDBG("hw_set_enh_SCO_codec 0x%x", codec);
+
+    if (bt_vendor_cbacks)
+        p_buf = (HC_BT_HDR *)bt_vendor_cbacks->alloc(BT_HC_HDR_SIZE + cmd_u16);
+
+    if (p_buf)
+    {
+        p_buf->event = MSG_STACK_TO_HC_HCI_CMD;
+        p_buf->offset = 0;
+        p_buf->layer_specific = 0;
+        p_buf->len = cmd_u16;
+        p = (uint8_t *)(p_buf + 1);
+
+            UINT16_TO_STREAM(p, HCI_VSC_WRITE_I2SPCM_INTERFACE_PARAM);
+            *p++ = SCO_I2SPCM_PARAM_SIZE;
+            if (codec == SCO_CODEC_CVSD)
+            {
+                bt_sco_i2spcm_param[2] = 0; /* SCO_I2SPCM_IF_SAMPLE_RATE  8k */
+                bt_sco_i2spcm_param[3] = bt_sco_param[1] = sco_bus_clock_rate;
+            }
+            else if (codec == SCO_CODEC_MSBC)
+            {
+                bt_sco_i2spcm_param[2] = wbs_sample_rate; /* sample rate FOR WBS */
+                bt_sco_i2spcm_param[3] = bt_sco_param[1] = sco_bus_wbs_clock_rate;
+            }
+            else
+            {
+                bt_sco_i2spcm_param[2] = 0; /* SCO_I2SPCM_IF_SAMPLE_RATE  8k */
+                bt_sco_i2spcm_param[3] = bt_sco_param[1] = sco_bus_clock_rate;
+                ALOGE("wrong codec is use in hw_sco_i2spcm_config, goes default NBS");
+            }
+
+            memcpy(p, &bt_sco_i2spcm_param, SCO_I2SPCM_PARAM_SIZE);
+            ALOGI("SCO PCM configure {0x%x, 0x%x, 0x%x, 0x%x}",
+                    bt_sco_i2spcm_param[0], bt_sco_i2spcm_param[1], bt_sco_i2spcm_param[2], bt_sco_i2spcm_param[3]);
+            cmd_u16 = HCI_VSC_WRITE_I2SPCM_INTERFACE_PARAM;
+            if ((ret = bt_vendor_cbacks->xmit_cb(cmd_u16, p_buf, hw_sco_i2spcm_param_cback)) == FALSE)
+            {
+                bt_vendor_cbacks->dealloc(p_buf);
+                ret_val = -1;
+            }
+            else
+            {
+               ret_val = -1;
+            }
+        }
+    return ret_val;
+}
+
+
 
 /*******************************************************************************
 **
@@ -1434,11 +1571,12 @@ static int hw_set_SCO_codec(uint16_t codec)
         else
         {
             /* Disable mSBC */
-            *p++ = (SCO_CODEC_PARAM_SIZE - 2); /* set the parameter size */
+            *p++ = (SCO_CODEC_PARAM_SIZE); /* set the parameter size */
             UINT8_TO_STREAM(p,0); /* disable */
+            UINT16_TO_STREAM(p, SCO_CODEC_NONE);
 
             /* set the totall size of this packet */
-            p_buf->len = HCI_CMD_PREAMBLE_SIZE + SCO_CODEC_PARAM_SIZE - 2;
+            p_buf->len = HCI_CMD_PREAMBLE_SIZE + SCO_CODEC_PARAM_SIZE;
 
             p_set_SCO_codec_cback = hw_set_CVSD_codec_cback;
             if ((codec != SCO_CODEC_CVSD) && (codec != SCO_CODEC_NONE))
@@ -1478,9 +1616,14 @@ int hw_set_audio_state(bt_vendor_op_audio_state_t *p_state)
     int ret_val = -1;
 
     if (!bt_vendor_cbacks)
+    {
         return ret_val;
+    }
 
-    ret_val = hw_set_SCO_codec(p_state->peer_codec);
+    if(p_state->use_enhanced_sco)
+        ret_val = hw_set_enh_sco_codec(p_state->peer_codec);
+    else
+        ret_val = hw_set_SCO_codec(p_state->peer_codec);
     return ret_val;
 }
 
