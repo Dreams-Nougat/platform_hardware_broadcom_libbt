@@ -1434,8 +1434,9 @@ static int hw_set_SCO_codec(uint16_t codec)
         else
         {
             /* Disable mSBC */
-            *p++ = (SCO_CODEC_PARAM_SIZE - 2); /* set the parameter size */
+            *p++ = (SCO_CODEC_PARAM_SIZE); /* set the parameter size */
             UINT8_TO_STREAM(p,0); /* disable */
+            UINT16_TO_STREAM(p, codec);
 
             /* set the totall size of this packet */
             p_buf->len = HCI_CMD_PREAMBLE_SIZE + SCO_CODEC_PARAM_SIZE - 2;
